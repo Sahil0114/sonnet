@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sonnet/auth_screen.dart';
 import 'package:sonnet/home_screen.dart';
 import 'package:sonnet/prompt_screen.dart';
 
@@ -10,24 +11,38 @@ class TogglePage extends StatefulWidget {
 }
 
 class _TogglePageState extends State<TogglePage> {
-  bool _showHomeScreen = true;
+  bool showAuthScreen = true;
+  bool showPromptScreen = false;
 
-  void _toggleScreen() {
+  void toggleScreen() {
     setState(() {
-      _showHomeScreen = !_showHomeScreen;
+      showAuthScreen = false;
+      showPromptScreen = false;
+    });
+  }
+
+  void showPrompt() {
+    setState(() {
+      showAuthScreen = false;
+      showPromptScreen = true;
+    });
+  }
+
+  void showHome() {
+    setState(() {
+      showAuthScreen = false;
+      showPromptScreen = false;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_showHomeScreen) {
-      return HomeScreen(
-        showPromptScreen: _toggleScreen,
-      );
+    if (showAuthScreen) {
+      return AuthScreen(showPromptScreen: showPrompt);
+    } else if (showPromptScreen) {
+      return PromptScreen(showHomeScreen: showHome);
     } else {
-      return PromptScreen(
-        showHomeScreen: _toggleScreen,
-      );
+      return HomeScreen(showPromptScreen: showPrompt);
     }
   }
 }
