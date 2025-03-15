@@ -11,12 +11,12 @@ class TogglePage extends StatefulWidget {
 }
 
 class _TogglePageState extends State<TogglePage> {
-  bool showAuthScreen = true;
+  bool showAuthScreen = false;
   bool showPromptScreen = false;
 
   void toggleScreen() {
     setState(() {
-      showAuthScreen = false;
+      showAuthScreen = true;
       showPromptScreen = false;
     });
   }
@@ -42,7 +42,7 @@ class _TogglePageState extends State<TogglePage> {
     } else if (showPromptScreen) {
       return PromptScreen(showHomeScreen: showHome);
     } else {
-      return HomeScreen(showPromptScreen: showPrompt);
+      return HomeScreen(showPromptScreen: toggleScreen);
     }
   }
 }
