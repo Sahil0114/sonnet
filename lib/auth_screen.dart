@@ -154,21 +154,24 @@ class _AuthScreenState extends State<AuthScreen> {
               child: Padding(
                 padding: const EdgeInsets.only(top: 40.0),
                 child: Stack(
+                  alignment: Alignment.center,
                   children: [
-                    Container(
-                      width: MediaQuery.of(context).size.width,
-                      height: MediaQuery.of(context).size.height * 0.3,
-                      decoration: const BoxDecoration(
-                        image: DecorationImage(
-                          image: AssetImage(
-                            "assets/images/sonnet.png",
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            image: DecorationImage(
+                              image: AssetImage("assets/images/sonnet.png"),
+                              fit: BoxFit.contain,
+                            ),
                           ),
-                          fit: BoxFit.contain,
                         ),
                       ),
                     ),
-                    Align(
-                      alignment: Alignment.bottomCenter,
+                    Positioned(
+                      bottom: 0,
                       child: Container(
                         padding: const EdgeInsets.all(5.0),
                         decoration: BoxDecoration(
@@ -185,9 +188,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             color: Color(0xFFFFFFFF),
                             shape: BoxShape.circle,
                             image: DecorationImage(
-                              image: AssetImage(
-                                "assets/images/sonnetlogo.png",
-                              ),
+                              image: AssetImage("assets/images/sonnetlogo.png"),
                               fit: BoxFit.cover,
                             ),
                           ),
