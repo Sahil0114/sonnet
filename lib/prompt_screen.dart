@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:just_audio/just_audio.dart';
 import 'package:sonnet/random_circles.dart';
 import 'dart:convert';
 
@@ -61,8 +62,47 @@ class _PromptScreenState extends State<PromptScreen> {
   // Add a ScrollController for the playlist
   final ScrollController _scrollController = ScrollController();
 
+  // Add these new fields for audio playback
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  int? _currentlyPlayingIndex;
+  bool _isPlaying = false;
+  bool _isSearching = false;
+  double _playbackProgress = 0.0;
+  String? _currentSongUrl;
+  String? _currentSongTitle;
+  String? _currentSongArtist;
+  bool _isPreviewMode = true; // Track if we're in preview mode or full song mode
+  bool _previewEnded = false; // Track if the preview has ended
+
+  @override
+  void initState() {
+    super.initState();
+    
+    // Set up audio player listeners
+    _audioPlayer.playerStateStream.listen((playerState) {
+      if (playerState.processingState == ProcessingState.completed) {
+        setState(() {
+          _isPlaying = false;
+          _playbackProgress = 0.0;
+          if (_isPreviewMode) {
+            _previewEnded = true; // Mark preview as ended
+          }
+        });
+      }
+    });
+    
+    _audioPlayer.positionStream.listen((position) {
+      if (_audioPlayer.duration != null) {
+        setState(() {
+          _playbackProgress = position.inMilliseconds / _audioPlayer.duration!.inMilliseconds;
+        });
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _audioPlayer.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -618,6 +658,395 @@ class _PromptScreenState extends State<PromptScreen> {
     });
   }
 
+  // Replace the _playSearchSong function with this new implementation
+  Future<void> _playSpotifyPreview(int index) async {
+    final song = _playlist[index];
+    final songTitle = song['title'] ?? '';
+    final songArtist = song['artist'] ?? '';
+    
+    setState(() {
+      _isSearching = true;
+      _currentlyPlayingIndex = index;
+      _currentSongTitle = songTitle;
+      _currentSongArtist = songArtist;
+      _isPreviewMode = true;
+      _previewEnded = false;
+    });
+    
+    try {
+      // Search for the song on Spotify
+      final query = Uri.encodeComponent('track:$songTitle artist:$songArtist');
+      final searchUrl = 'https://api.spotify.com/v1/search?q=$query&type=track&limit=1';
+      
+      // Get a token for the API call
+      // Note: This is a client credentials flow that doesn't require user auth
+      final tokenResponse = await http.post(
+        Uri.parse('https://accounts.spotify.com/api/token'),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': 'Basic ${base64Encode(utf8.encode('$clientId:$clientSecret'))}',
+        },
+        body: {
+          'grant_type': 'client_credentials',
+        },
+      );
+      
+      if (tokenResponse.statusCode != 200) {
+        throw 'Failed to get access token for Spotify API';
+      }
+      
+      final tokenData = jsonDecode(tokenResponse.body);
+      final apiToken = tokenData['access_token'];
+      
+      // Now use the token to search for the track
+      final response = await http.get(
+        Uri.parse(searchUrl),
+        headers: {'Authorization': 'Bearer $apiToken'},
+      );
+      
+      if (response.statusCode != 200) {
+        throw 'Failed to search Spotify: ${response.body}';
+      }
+      
+      final data = jsonDecode(response.body);
+      
+      if (data['tracks']['items'].isEmpty) {
+        throw 'No results found on Spotify';
+      }
+      
+      final trackData = data['tracks']['items'][0];
+      final previewUrl = trackData['preview_url'];
+      
+      if (previewUrl == null) {
+        throw 'No preview available for this track';
+      }
+      
+      _currentSongUrl = previewUrl;
+      
+      // Play the preview
+      await _audioPlayer.setUrl(previewUrl);
+      await _audioPlayer.play();
+      
+      setState(() {
+        _isPlaying = true;
+        _isSearching = false;
+      });
+    } catch (e) {
+      print('Error playing Spotify preview: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not play preview: $e')),
+      );
+      setState(() {
+        _isSearching = false;
+        _isPreviewMode = true;
+        _previewEnded = false;
+      });
+    }
+  }
+  
+  // Helper to build song list item
+  Widget _buildSongListItem(int index, Map<String, String> song) {
+    final isPlaying = _currentlyPlayingIndex == index;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12, right: 12),
+      decoration: BoxDecoration(
+        color: isPlaying 
+            ? Colors.white.withOpacity(0.1) 
+            : Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ListTile(
+        leading: Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: isPlaying && _isSearching
+                ? SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : isPlaying
+                    ? IconButton(
+                        icon: Icon(
+                          _isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.white,
+                        ),
+                        onPressed: _togglePlayPause,
+                        tooltip: _isPreviewMode ? '30-sec preview' : 'Full song',
+                      )
+                    : Text(
+                        '${index + 1}',
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+          ),
+        ),
+        title: Text(
+          song['title'] ?? '',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        subtitle: Text(
+          song['artist'] ?? '',
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 14,
+          ),
+        ),
+        trailing: isPlaying
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Show preview badge if in preview mode
+                  if (_isPreviewMode)
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Colors.amber.withOpacity(0.5),
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        'Preview',
+                        style: GoogleFonts.inter(
+                          color: Colors.amber,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.stop,
+                      color: Colors.white70,
+                    ),
+                    onPressed: _stopPlayback,
+                  ),
+                ],
+              )
+            : IconButton(
+                icon: const Icon(
+                  Icons.play_arrow,
+                  color: Colors.white70,
+                ),
+                onPressed: () => _playSpotifyPreview(index),
+                tooltip: 'Play 30-sec preview',
+              ),
+        onTap: () {
+          if (isPlaying) {
+            _togglePlayPause();
+          } else {
+            _playSpotifyPreview(index);
+          }
+        },
+      ),
+    );
+  }
+  
+  // Updated player bar widget to show preview status and offer external options
+  Widget _buildPlayerBar() {
+    if (_currentlyPlayingIndex == null) return const SizedBox.shrink();
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16, left: 8, right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              // Album art or placeholder
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.music_note,
+                    color: Colors.white70,
+                    size: 20,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Song info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _currentSongTitle ?? '',
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      _currentSongArtist ?? '',
+                      style: GoogleFonts.inter(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              // Preview indicator
+              if (_isPreviewMode)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: Colors.amber.withOpacity(0.5),
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    'Preview (30s)',
+                    style: GoogleFonts.inter(
+                      color: Colors.amber,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              // Play/pause button
+              _isSearching
+                  ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : IconButton(
+                      icon: Icon(
+                        _isPlaying ? Icons.pause : Icons.play_arrow,
+                        color: Colors.white,
+                      ),
+                      onPressed: _togglePlayPause,
+                    ),
+              // Stop button
+              IconButton(
+                icon: const Icon(
+                  Icons.stop,
+                  color: Colors.white70,
+                ),
+                onPressed: _stopPlayback,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Progress bar
+          LinearProgressIndicator(
+            value: _playbackProgress,
+            backgroundColor: Colors.white.withOpacity(0.1),
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+          ),
+          // Show message after preview ends
+          if (_previewEnded && !_isPlaying)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                children: [
+                  Text(
+                    'Preview ended. Open in Spotify for the full song',
+                    style: GoogleFonts.inter(
+                      color: Colors.white70,
+                      fontSize: 12,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  // Button to open in Spotify
+                  InkWell(
+                    onTap: () {
+                      if (_currentlyPlayingIndex != null) {
+                        final song = _playlist[_currentlyPlayingIndex!];
+                        final query = Uri.encodeComponent('${song['artist']} ${song['title']}');
+                        launchUrl(
+                          Uri.parse('https://open.spotify.com/search/$query'),
+                          mode: LaunchMode.externalApplication,
+                        );
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1DB954), // Spotify green
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Image.asset(
+                            'assets/images/spotify.png',
+                            width: 16,
+                            height: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Open in Spotify',
+                            style: GoogleFonts.inter(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -702,7 +1131,6 @@ class _PromptScreenState extends State<PromptScreen> {
                                     color: const Color(0xFFFFFFFF)
                                         .withOpacity(0.8),
                                   ),
-                                ),
 
                                 // Padding around various genres in a wrap
                                 Padding(
@@ -911,70 +1339,13 @@ class _PromptScreenState extends State<PromptScreen> {
                                     scrollbars: false, // Hide default scrollbar
                                   ),
                                   child: ListView.builder(
-                                    controller:
-                                        _scrollController, // Add controller to the main list
+                                    controller: _scrollController,
                                     padding:
                                         const EdgeInsets.symmetric(vertical: 8),
                                     itemCount: _playlist.length,
                                     itemBuilder: (context, index) {
                                       final song = _playlist[index];
-                                      return Container(
-                                        margin: const EdgeInsets.only(
-                                            bottom: 12, right: 12),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withOpacity(0.05),
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: ListTile(
-                                          leading: Container(
-                                            width: 50,
-                                            height: 50,
-                                            decoration: BoxDecoration(
-                                              color:
-                                                  Colors.white.withOpacity(0.1),
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                            ),
-                                            child: Center(
-                                              child: Text(
-                                                '${index + 1}',
-                                                style: GoogleFonts.inter(
-                                                  color: Colors.white,
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          title: Text(
-                                            song['title'] ?? '',
-                                            style: GoogleFonts.inter(
-                                              color: Colors.white,
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          subtitle: Text(
-                                            song['artist'] ?? '',
-                                            style: GoogleFonts.inter(
-                                              color: Colors.white70,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                          onTap: () {
-                                            // Individual song tap handler
-                                            final query = Uri.encodeComponent(
-                                                '${song['artist']} ${song['title']}');
-                                            launchUrl(
-                                              Uri.parse(
-                                                  'https://open.spotify.com/search/$query'),
-                                              mode: LaunchMode
-                                                  .externalApplication,
-                                            );
-                                          },
-                                        ),
-                                      );
+                                      return _buildSongListItem(index, song);
                                     },
                                   ),
                                 ),
@@ -1060,6 +1431,8 @@ class _PromptScreenState extends State<PromptScreen> {
                             ],
                           ),
                         ),
+                        // Add player bar above the streaming service buttons
+                        _buildPlayerBar(),
                         // Streaming service buttons
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1137,4 +1510,31 @@ class _PromptScreenState extends State<PromptScreen> {
       ),
     );
   }
+
+  // Function to toggle play/pause
+  void _togglePlayPause() {
+    if (_isPlaying) {
+      _audioPlayer.pause();
+    } else {
+      _audioPlayer.play();
+    }
+
+    setState(() {
+      _isPlaying = !_isPlaying;
+    });
+  }
+
+  // Function to stop playback
+  void _stopPlayback() {
+    _audioPlayer.stop();
+    setState(() {
+      _isPlaying = false;
+      _currentlyPlayingIndex = null;
+      _playbackProgress = 0.0;
+      _currentSongUrl = null;
+      _currentSongTitle = null;
+      _currentSongArtist = null;
+    });
+  }
 }
+
