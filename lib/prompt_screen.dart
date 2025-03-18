@@ -681,9 +681,10 @@ class _PromptScreenState extends State<PromptScreen> {
 
     try {
       // Search for the song on Spotify
-      final query = Uri.encodeComponent('track:$songTitle artist:$songArtist');
+      // Make the query more flexible by not requiring both title and artist to match exactly
+      final query = Uri.encodeComponent('$songTitle $songArtist');
       final searchUrl =
-          'https://api.spotify.com/v1/search?q=$query&type=track&limit=1';
+          'https://api.spotify.com/v1/search?q=$query&type=track&limit=5';
 
       // Get a token for the API call
       // Note: This is a client credentials flow that doesn't require user auth
@@ -719,6 +720,41 @@ class _PromptScreenState extends State<PromptScreen> {
       final data = jsonDecode(response.body);
 
       if (data['tracks']['items'].isEmpty) {
+        // Try a more relaxed search if the first one failed
+        final fallbackQuery = Uri.encodeComponent(songTitle);
+        final fallbackUrl =
+            'https://api.spotify.com/v1/search?q=$fallbackQuery&type=track&limit=5';
+
+        final fallbackResponse = await http.get(
+          Uri.parse(fallbackUrl),
+          headers: {'Authorization': 'Bearer $apiToken'},
+        );
+
+        if (fallbackResponse.statusCode == 200) {
+          final fallbackData = jsonDecode(fallbackResponse.body);
+          if (fallbackData['tracks']['items'].isNotEmpty) {
+            // Use the first result from the fallback search
+            final trackData = fallbackData['tracks']['items'][0];
+            final previewUrl = trackData['preview_url'];
+
+            if (previewUrl == null) {
+              throw 'No preview available for this track';
+            }
+
+            _currentSongUrl = previewUrl;
+
+            // Play the preview
+            await _audioPlayer.setUrl(previewUrl);
+            await _audioPlayer.play();
+
+            setState(() {
+              _isPlaying = true;
+              _isSearching = false;
+            });
+            return;
+          }
+        }
+
         throw 'No results found on Spotify';
       }
 
@@ -726,6 +762,23 @@ class _PromptScreenState extends State<PromptScreen> {
       final previewUrl = trackData['preview_url'];
 
       if (previewUrl == null) {
+        // Try other results if the first one doesn't have a preview
+        for (var i = 1; i < data['tracks']['items'].length; i++) {
+          final alternativeTrack = data['tracks']['items'][i];
+          final alternativePreviewUrl = alternativeTrack['preview_url'];
+          if (alternativePreviewUrl != null) {
+            _currentSongUrl = alternativePreviewUrl;
+            await _audioPlayer.setUrl(alternativePreviewUrl);
+            await _audioPlayer.play();
+
+            setState(() {
+              _isPlaying = true;
+              _isSearching = false;
+            });
+            return;
+          }
+        }
+
         throw 'No preview available for this track';
       }
 
@@ -742,7 +795,17 @@ class _PromptScreenState extends State<PromptScreen> {
     } catch (e) {
       print('Error playing Spotify preview: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not play preview: $e')),
+        SnackBar(
+          content: Text('Could not play preview: $e'),
+          action: SnackBarAction(
+            label: 'Try YouTube',
+            onPressed: () {
+              if (_currentlyPlayingIndex != null) {
+                _tryPlayFullSongFromYoutube();
+              }
+            },
+          ),
+        ),
       );
       setState(() {
         _isSearching = false;
@@ -1651,16 +1714,19 @@ class _PromptScreenState extends State<PromptScreen> {
                                       // Only show scroll indicator if there are enough items to scroll
                                       if (!_scrollController.hasClients ||
                                           _scrollController
-                                                  .position.maxScrollExtent ==
+                                                  .position.maxScrollExtent <=
                                               0) {
                                         return const SizedBox.shrink();
                                       }
 
                                       // Calculate position of the scroll indicator
                                       final double scrollFraction =
-                                          _scrollController.position.pixels /
-                                              _scrollController
-                                                  .position.maxScrollExtent;
+                                          _scrollController.hasClients
+                                              ? (_scrollController
+                                                      .position.pixels /
+                                                  _scrollController
+                                                      .position.maxScrollExtent)
+                                              : 0.0;
                                       final double indicatorHeight =
                                           50.0; // Height of the scroll indicator
                                       final double maxOffset =
