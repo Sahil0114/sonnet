@@ -71,13 +71,18 @@ class _PromptScreenState extends State<PromptScreen> {
   String? _currentSongUrl;
   String? _currentSongTitle;
   String? _currentSongArtist;
-  bool _isPreviewMode = true; // Track if we're in preview mode or full song mode
+  bool _isPreviewMode =
+      true; // Track if we're in preview mode or full song mode
   bool _previewEnded = false; // Track if the preview has ended
+
+  // Add these variables to the state class - place near the other audio-related fields
+  bool _isLoadingFullSong = false;
+  bool _isPlayingFullSong = false;
 
   @override
   void initState() {
     super.initState();
-    
+
     // Set up audio player listeners
     _audioPlayer.playerStateStream.listen((playerState) {
       if (playerState.processingState == ProcessingState.completed) {
@@ -90,11 +95,12 @@ class _PromptScreenState extends State<PromptScreen> {
         });
       }
     });
-    
+
     _audioPlayer.positionStream.listen((position) {
       if (_audioPlayer.duration != null) {
         setState(() {
-          _playbackProgress = position.inMilliseconds / _audioPlayer.duration!.inMilliseconds;
+          _playbackProgress =
+              position.inMilliseconds / _audioPlayer.duration!.inMilliseconds;
         });
       }
     });
@@ -663,7 +669,7 @@ class _PromptScreenState extends State<PromptScreen> {
     final song = _playlist[index];
     final songTitle = song['title'] ?? '';
     final songArtist = song['artist'] ?? '';
-    
+
     setState(() {
       _isSearching = true;
       _currentlyPlayingIndex = index;
@@ -672,61 +678,63 @@ class _PromptScreenState extends State<PromptScreen> {
       _isPreviewMode = true;
       _previewEnded = false;
     });
-    
+
     try {
       // Search for the song on Spotify
       final query = Uri.encodeComponent('track:$songTitle artist:$songArtist');
-      final searchUrl = 'https://api.spotify.com/v1/search?q=$query&type=track&limit=1';
-      
+      final searchUrl =
+          'https://api.spotify.com/v1/search?q=$query&type=track&limit=1';
+
       // Get a token for the API call
       // Note: This is a client credentials flow that doesn't require user auth
       final tokenResponse = await http.post(
         Uri.parse('https://accounts.spotify.com/api/token'),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': 'Basic ${base64Encode(utf8.encode('$clientId:$clientSecret'))}',
+          'Authorization':
+              'Basic ${base64Encode(utf8.encode('$clientId:$clientSecret'))}',
         },
         body: {
           'grant_type': 'client_credentials',
         },
       );
-      
+
       if (tokenResponse.statusCode != 200) {
         throw 'Failed to get access token for Spotify API';
       }
-      
+
       final tokenData = jsonDecode(tokenResponse.body);
       final apiToken = tokenData['access_token'];
-      
+
       // Now use the token to search for the track
       final response = await http.get(
         Uri.parse(searchUrl),
         headers: {'Authorization': 'Bearer $apiToken'},
       );
-      
+
       if (response.statusCode != 200) {
         throw 'Failed to search Spotify: ${response.body}';
       }
-      
+
       final data = jsonDecode(response.body);
-      
+
       if (data['tracks']['items'].isEmpty) {
         throw 'No results found on Spotify';
       }
-      
+
       final trackData = data['tracks']['items'][0];
       final previewUrl = trackData['preview_url'];
-      
+
       if (previewUrl == null) {
         throw 'No preview available for this track';
       }
-      
+
       _currentSongUrl = previewUrl;
-      
+
       // Play the preview
       await _audioPlayer.setUrl(previewUrl);
       await _audioPlayer.play();
-      
+
       setState(() {
         _isPlaying = true;
         _isSearching = false;
@@ -743,16 +751,16 @@ class _PromptScreenState extends State<PromptScreen> {
       });
     }
   }
-  
+
   // Helper to build song list item
   Widget _buildSongListItem(int index, Map<String, String> song) {
     final isPlaying = _currentlyPlayingIndex == index;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12, right: 12),
       decoration: BoxDecoration(
-        color: isPlaying 
-            ? Colors.white.withOpacity(0.1) 
+        color: isPlaying
+            ? Colors.white.withOpacity(0.1)
             : Colors.white.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12),
       ),
@@ -781,7 +789,8 @@ class _PromptScreenState extends State<PromptScreen> {
                           color: Colors.white,
                         ),
                         onPressed: _togglePlayPause,
-                        tooltip: _isPreviewMode ? '30-sec preview' : 'Full song',
+                        tooltip:
+                            _isPreviewMode ? '30-sec preview' : 'Full song',
                       )
                     : Text(
                         '${index + 1}',
@@ -816,7 +825,8 @@ class _PromptScreenState extends State<PromptScreen> {
                   if (_isPreviewMode)
                     Container(
                       margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.amber.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(4),
@@ -861,11 +871,183 @@ class _PromptScreenState extends State<PromptScreen> {
       ),
     );
   }
-  
-  // Updated player bar widget to show preview status and offer external options
+
+  // Now let's add the YouTube full song playback functionality
+
+  // Add this method to check and play the full song via YouTube
+  Future<void> _tryPlayFullSongFromYoutube() async {
+    if (_currentlyPlayingIndex == null) return;
+
+    final song = _playlist[_currentlyPlayingIndex!];
+    final songTitle = song['title'] ?? '';
+    final songArtist = song['artist'] ?? '';
+
+    setState(() {
+      _isLoadingFullSong = true;
+    });
+
+    try {
+      // Try to find the song on YouTube using public API
+      final query = Uri.encodeComponent('$songArtist $songTitle audio');
+
+      // Check if we have a YouTube API key
+      if (dotenv.env['YOUTUBE_API_KEY'] == null ||
+          dotenv.env['YOUTUBE_API_KEY'] == 'YOUR_API_KEY_HERE') {
+        throw 'YouTube API key not configured';
+      }
+
+      final searchUrl =
+          'https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=$query&type=video&key=${dotenv.env['YOUTUBE_API_KEY']}';
+
+      final response = await http.get(Uri.parse(searchUrl));
+
+      if (response.statusCode != 200) {
+        throw 'Failed to search YouTube: ${response.body}';
+      }
+
+      final data = jsonDecode(response.body);
+      if (data['items'] == null || data['items'].isEmpty) {
+        throw 'No results found on YouTube';
+      }
+
+      // In a real app, you would need to check if the song is free/available
+      // For this implementation, we'll simulate a check by looking at the title
+      final videoTitle = data['items'][0]['snippet']['title'] as String;
+      final videoId = data['items'][0]['id']['videoId'];
+
+      // Simulate a check for "legal to play" based on some keywords
+      // This is NOT a reliable method for actual copyright checking - just a demo
+      final containsCopyrightTerms =
+          videoTitle.toLowerCase().contains('official audio') ||
+              videoTitle.toLowerCase().contains('official music video') ||
+              videoTitle.toLowerCase().contains('provided to youtube');
+
+      if (containsCopyrightTerms) {
+        // Show legal notice dialog
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(
+                'Copyright Notice',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.copyright,
+                    size: 48,
+                    color: Colors.red,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'This song cannot be played in full due to copyright restrictions.',
+                    style: GoogleFonts.inter(),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'You can continue listening to the preview or open this song in Spotify.',
+                    style: GoogleFonts.inter(
+                      color: Colors.grey[600],
+                      fontSize: 14,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Back to Preview',
+                    style: GoogleFonts.inter(),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    final query = Uri.encodeComponent('$songArtist $songTitle');
+                    launchUrl(
+                      Uri.parse('https://open.spotify.com/search/$query'),
+                      mode: LaunchMode.externalApplication,
+                    );
+                  },
+                  child: Text(
+                    'Open in Spotify',
+                    style: GoogleFonts.inter(
+                      color: const Color(0xFF1DB954),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        setState(() {
+          _isLoadingFullSong = false;
+        });
+        return;
+      }
+
+      // If it's legally playable, play the full song
+      final audioUrl = 'https://www.youtube.com/watch?v=$videoId';
+
+      // Stop the current preview
+      await _audioPlayer.stop();
+
+      // Start playing the full song
+      await _audioPlayer.setUrl(audioUrl);
+      await _audioPlayer.play();
+
+      setState(() {
+        _isLoadingFullSong = false;
+        _isPlaying = true;
+        _isPlayingFullSong = true;
+        _isPreviewMode = false;
+        _previewEnded = false;
+        _currentSongUrl = audioUrl;
+      });
+    } catch (e) {
+      print('Error playing full song: $e');
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not play full song: $e'),
+            action: SnackBarAction(
+              label: 'Try Spotify',
+              onPressed: () {
+                if (_currentlyPlayingIndex != null) {
+                  final song = _playlist[_currentlyPlayingIndex!];
+                  final query =
+                      Uri.encodeComponent('${song['artist']} ${song['title']}');
+                  launchUrl(
+                    Uri.parse('https://open.spotify.com/search/$query'),
+                    mode: LaunchMode.externalApplication,
+                  );
+                }
+              },
+            ),
+          ),
+        );
+      }
+
+      setState(() {
+        _isLoadingFullSong = false;
+      });
+    }
+  }
+
+  // Update the _buildPlayerBar method to include full song options
   Widget _buildPlayerBar() {
     if (_currentlyPlayingIndex == null) return const SizedBox.shrink();
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16, left: 8, right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -929,30 +1111,54 @@ class _PromptScreenState extends State<PromptScreen> {
                   ],
                 ),
               ),
-              // Preview indicator
-              if (_isPreviewMode)
-                Container(
-                  margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: Colors.amber.withOpacity(0.5),
-                      width: 1,
-                    ),
-                  ),
-                  child: Text(
-                    'Preview (30s)',
-                    style: GoogleFonts.inter(
-                      color: Colors.amber,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
+              // Preview/Full song indicator
+              _isPlayingFullSong
+                  ? Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Colors.green.withOpacity(0.5),
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        'Full Song',
+                        style: GoogleFonts.inter(
+                          color: Colors.green,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    )
+                  : _isPreviewMode
+                      ? Container(
+                          margin: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: Colors.amber.withOpacity(0.5),
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            'Preview (30s)',
+                            style: GoogleFonts.inter(
+                              color: Colors.amber,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
               // Play/pause button
-              _isSearching
+              _isSearching || _isLoadingFullSong
                   ? SizedBox(
                       width: 20,
                       height: 20,
@@ -983,61 +1189,102 @@ class _PromptScreenState extends State<PromptScreen> {
           LinearProgressIndicator(
             value: _playbackProgress,
             backgroundColor: Colors.white.withOpacity(0.1),
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            valueColor: AlwaysStoppedAnimation<Color>(
+                _isPlayingFullSong ? Colors.green : Colors.white),
           ),
-          // Show message after preview ends
+          // Show message after preview ends or full song options
           if (_previewEnded && !_isPlaying)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Column(
                 children: [
                   Text(
-                    'Preview ended. Open in Spotify for the full song',
+                    'Preview ended. What would you like to do?',
                     style: GoogleFonts.inter(
                       color: Colors.white70,
                       fontSize: 12,
                     ),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 8),
-                  // Button to open in Spotify
-                  InkWell(
-                    onTap: () {
-                      if (_currentlyPlayingIndex != null) {
-                        final song = _playlist[_currentlyPlayingIndex!];
-                        final query = Uri.encodeComponent('${song['artist']} ${song['title']}');
-                        launchUrl(
-                          Uri.parse('https://open.spotify.com/search/$query'),
-                          mode: LaunchMode.externalApplication,
-                        );
-                      }
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1DB954), // Spotify green
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset(
-                            'assets/images/spotify.png',
-                            width: 16,
-                            height: 16,
+                  const SizedBox(height: 12),
+                  // Button row with options
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Try full song on YouTube button
+                      InkWell(
+                        onTap: _tryPlayFullSongFromYoutube,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.8), // YouTube red
+                            borderRadius: BorderRadius.circular(20),
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Open in Spotify',
-                            style: GoogleFonts.inter(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.play_circle_outline,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Try Full Song',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                      // Open in Spotify button
+                      InkWell(
+                        onTap: () {
+                          if (_currentlyPlayingIndex != null) {
+                            final song = _playlist[_currentlyPlayingIndex!];
+                            final query = Uri.encodeComponent(
+                                '${song['artist']} ${song['title']}');
+                            launchUrl(
+                              Uri.parse(
+                                  'https://open.spotify.com/search/$query'),
+                              mode: LaunchMode.externalApplication,
+                            );
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1DB954), // Spotify green
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Image.asset(
+                                'assets/images/spotify.png',
+                                width: 16,
+                                height: 16,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Spotify',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1045,6 +1292,22 @@ class _PromptScreenState extends State<PromptScreen> {
         ],
       ),
     );
+  }
+
+  // Update stopPlayback to handle full song mode
+  void _stopPlayback() {
+    _audioPlayer.stop();
+    setState(() {
+      _isPlaying = false;
+      _isPlayingFullSong = false;
+      _currentlyPlayingIndex = null;
+      _playbackProgress = 0.0;
+      _currentSongUrl = null;
+      _currentSongTitle = null;
+      _currentSongArtist = null;
+      _isPreviewMode = true;
+      _previewEnded = false;
+    });
   }
 
   @override
@@ -1131,6 +1394,7 @@ class _PromptScreenState extends State<PromptScreen> {
                                     color: const Color(0xFFFFFFFF)
                                         .withOpacity(0.8),
                                   ),
+                                ),
 
                                 // Padding around various genres in a wrap
                                 Padding(
@@ -1523,18 +1787,4 @@ class _PromptScreenState extends State<PromptScreen> {
       _isPlaying = !_isPlaying;
     });
   }
-
-  // Function to stop playback
-  void _stopPlayback() {
-    _audioPlayer.stop();
-    setState(() {
-      _isPlaying = false;
-      _currentlyPlayingIndex = null;
-      _playbackProgress = 0.0;
-      _currentSongUrl = null;
-      _currentSongTitle = null;
-      _currentSongArtist = null;
-    });
-  }
 }
-
