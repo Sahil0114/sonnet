@@ -43,12 +43,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     // Container for image
                     Container(
                       width: MediaQuery.of(context).size.width,
+                      height: MediaQuery.of(context).size.height * 0.5,
                       decoration: const BoxDecoration(
                         image: DecorationImage(
                           image: AssetImage(
                             "assets/images/sonnet.png",
                           ),
-                          fit: BoxFit.cover,
+                          fit: BoxFit.contain,
                         ),
                       ),
                     ),

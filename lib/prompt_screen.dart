@@ -58,6 +58,15 @@ class _PromptScreenState extends State<PromptScreen> {
   static const String redirectUri = 'sonnet://callback';
   String? _spotifyAccessToken;
 
+  // Add a ScrollController for the playlist
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   // Function for selected genre(s)
   void _onGenreTap(String genre) {
     setState(() {
@@ -902,6 +911,8 @@ class _PromptScreenState extends State<PromptScreen> {
                                     scrollbars: false, // Hide default scrollbar
                                   ),
                                   child: ListView.builder(
+                                    controller:
+                                        _scrollController, // Add controller to the main list
                                     padding:
                                         const EdgeInsets.symmetric(vertical: 8),
                                     itemCount: _playlist.length,
@@ -969,28 +980,81 @@ class _PromptScreenState extends State<PromptScreen> {
                                 ),
                               ),
                               // Custom scrollbar
-                              Container(
-                                width: 6,
-                                margin:
-                                    const EdgeInsets.symmetric(horizontal: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(3),
-                                ),
-                                child: ListView.builder(
-                                  itemCount: (_playlist.length / 5)
-                                      .ceil(), // One marker for every 5 songs
-                                  itemBuilder: (context, index) {
-                                    return Container(
-                                      height: 30,
-                                      margin: const EdgeInsets.symmetric(
-                                          vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.3),
-                                        borderRadius: BorderRadius.circular(3),
-                                      ),
+                              GestureDetector(
+                                onVerticalDragUpdate: (details) {
+                                  // Calculate new scroll position based on drag
+                                  if (_scrollController.hasClients) {
+                                    final double scrollFraction =
+                                        details.delta.dy /
+                                            MediaQuery.of(context).size.height;
+                                    final double scrollDistance =
+                                        scrollFraction *
+                                            _scrollController
+                                                .position.maxScrollExtent;
+                                    _scrollController.position.jumpTo(
+                                      (_scrollController.position.pixels +
+                                              scrollDistance)
+                                          .clamp(
+                                              0.0,
+                                              _scrollController
+                                                  .position.maxScrollExtent),
                                     );
-                                  },
+                                  }
+                                },
+                                child: Container(
+                                  width:
+                                      8, // Made slightly wider for better touch target
+                                  margin:
+                                      const EdgeInsets.symmetric(horizontal: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: AnimatedBuilder(
+                                    animation: _scrollController,
+                                    builder: (context, child) {
+                                      // Only show scroll indicator if there are enough items to scroll
+                                      if (!_scrollController.hasClients ||
+                                          _scrollController
+                                                  .position.maxScrollExtent ==
+                                              0) {
+                                        return const SizedBox.shrink();
+                                      }
+
+                                      // Calculate position of the scroll indicator
+                                      final double scrollFraction =
+                                          _scrollController.position.pixels /
+                                              _scrollController
+                                                  .position.maxScrollExtent;
+                                      final double indicatorHeight =
+                                          50.0; // Height of the scroll indicator
+                                      final double maxOffset =
+                                          MediaQuery.of(context).size.height *
+                                                  0.5 -
+                                              indicatorHeight;
+                                      final double offset =
+                                          scrollFraction * maxOffset;
+
+                                      return Stack(
+                                        children: [
+                                          Positioned(
+                                            top: offset,
+                                            left: 0,
+                                            right: 0,
+                                            child: Container(
+                                              height: indicatorHeight,
+                                              decoration: BoxDecoration(
+                                                color: Colors.white
+                                                    .withOpacity(0.5),
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
                                 ),
                               ),
                             ],
